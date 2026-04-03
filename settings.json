@@ -1,0 +1,20 @@
+// this is the settings file for the project to be applied in vs code{
+{  "python.defaultInterpreterPath": "/usr/local/bin/python3",
+  "python.createEnvironment.trigger": "off",
+  "python.analysis.autoImportCompletions": true,
+  "github.copilot.enable": {
+    "*": true,
+    "plaintext": false,
+    "markdown": false,
+    "scminput": false,
+    "python": true
+  },
+  "terminal.integrated.initialHint": false,
+  "chat.viewSessions.orientation": "stacked",
+  "git.autofetch": true,
+  "http.systemCertificates": true,
+  "http.fetchAdditionalSupport": true,
+  "http.proxy": "http://127.0.0.1:8080",
+  "http.proxySupport": "override",
+  "http.proxyStrictSSL": false,
+}
