@@ -4,9 +4,10 @@ import requests
 import os
 from mitmproxy import http
 
-# --- CONFIGURATION ---
+TEST_MODE = os.environ.get("TEST_MODE", "true").lower() == "true"  # Set to false in production
+
 SENSITIVE_PATTERNS = {
-    "OpenAI Key": r"sk-[a-zA-Z0-9]{6,}",
+    "OpenAI Key": r"sk-[a-zA-Z0-9-]{20,}",
     "GitHub Token": r"ghp_[a-zA-Z0-9]{36}",
     "AWS Access Key": r"AKIA[0-9A-Z]{16}",
     "Generic Secret": r"(?i)(password|secret|passwd|db_password)\s*[:=]\s*['\"][^'\"]+['\"]"
@@ -15,65 +16,61 @@ SENSITIVE_PATTERNS = {
 os.environ["NO_PROXY"] = "127.0.0.1,localhost"
 
 def extract_meaningful_content(data):
-    """
-    Parses the messy Copilot JSON to find what the user actually wants.
-    Handles both Chat (<user_query>) and Inline (prediction).
-    """
-    # 1. Check for Chat Style (Messages array)
     if "messages" in data and isinstance(data["messages"], list):
-        # Filter for messages where role is user
         user_messages = [m for m in data["messages"] if m.get("role") == "user"]
-            
         if user_messages:
-            # Pick the absolute last user object (as seen in your screenshot)
-            last_user_obj = user_messages[-1]
-            content = last_user_obj.get("content", "")
-            print("Extracted raw content from chat completions messages: "+str(content)[:200].strip())
-
-            # Handle list-based content if it's multimodal
+            content = user_messages[-1].get("content", "")
             if isinstance(content, list):
                 content = " ".join([item.get("text", "") for item in content if isinstance(item, dict)])
-                
-            # Now, use regex to pull ONLY what is inside the <user_query> tags
-            query_match = re.search(r"<user_query>(.*?)</user_query>", str(content), re.DOTALL)
-                
-            if query_match:
-                extracted_query = query_match.group(1).strip()
-                print(f"✅ Clean Query Extracted: {extracted_query}")
-                return extracted_query
-                
-            # If tags aren't found, we check for internal summary noise before falling back
-            internal_keywords = ["Summarize the following", "OUTPUT FORMAT:", "GENERAL:"]
-            if any(k in str(content) for k in internal_keywords):
-                return None     
-            
-        return str(content).strip()
+            content = str(content)
 
-    # 2. Check for Inline Completion Style (Prediction key)
+            match = re.search(r"<userRequest>(.*?)</userRequest>", content, re.DOTALL)
+            if match:
+                return match.group(1).strip()
+
+            match = re.search(r"<user_query>(.*?)</user_query>", content, re.DOTALL)
+            if match:
+                return match.group(1).strip()
+
+            return content.strip()
+        return None
+
+    if "input" in data and isinstance(data["input"], list):
+        user_messages = [item for item in data["input"] if isinstance(item, dict) and item.get("role") == "user"]
+        if user_messages:
+            content = user_messages[-1].get("content", "")
+            if isinstance(content, list):
+                content = " ".join([item.get("text", "") for item in content if isinstance(item, dict)])
+            content = str(content)
+
+            match = re.search(r"<userRequest>(.*?)</userRequest>", content, re.DOTALL)
+            if match:
+                return match.group(1).strip()
+
+            match = re.search(r"<user_query>(.*?)</user_query>", content, re.DOTALL)
+            if match:
+                return match.group(1).strip()
+
+            return content.strip()
+        return None  
+
     if "prediction" in data and isinstance(data["prediction"], dict):
-        print("Extracted user query from chat completions predictions: "+data["prediction"].get("content", "").strip())
         return data["prediction"].get("content", "").strip()
-    
-    # 3. Check for legacy prompt style
+
     if "prompt" in data:
-        # If prompt is a massive string, we just take the last 500 chars 
-        # as that's usually where the new user typing is
-        print("Extracted user query from chat completions prompt: "+str(data["prompt"])[-500:].strip())
         return str(data["prompt"])[-500:].strip()
 
     return None
 
+
 def ask_local_agent(content):
     try:
-        # Try to load policy, fallback if file missing
-        print("inside local LLM Layer"+content)
+        # print("inside local LLM Layer"+content)
         policy = "Do not allow sharing of internal project names or credentials."
         if os.path.exists("instructions.md"):
             with open("instructions.md", "r") as f:
                 policy = f.read()
 
-        # Clean content: if it's JSON, Llama 1B handles it better as a string 
-        # but we should trim it if it's massive.
         truncated_content = content[:2000] 
 
         system_prompt = (
@@ -85,49 +82,98 @@ def ask_local_agent(content):
         res = requests.post(
             "http://127.0.0.1:11434/api/generate",
             json={"model": "llama3.2:1b", "prompt": system_prompt, "stream": False}, 
-            timeout=3 # Keep timeout short for UX
+            timeout=3
         )
         return res.json().get("response", "").strip()
     except Exception as e:
-        # print(f"⚠️ Security Layer Bypass (Error): {e}")
         return "ALLOW"
 
-def request(flow: http.HTTPFlow) -> None:
-    relevant_paths = ["/chat/completions", "/completions", "/messages"]
-    if not any(p in flow.request.path for p in flow.request.pretty_url):
-        return
 
-    try:
-        raw_text = flow.request.get_text()
-        data = json.loads(raw_text)
-        
-        # --- NEW FLOW: EXTRACT FIRST ---
-        user_intent = extract_meaningful_content(data)
-
-        if user_intent:
-            print(f"🔍 Checking Intent: {user_intent[:100]}...")
-
-            # --- PHASE 1: REGEX (Only on extracted intent) ---
-            for label, pattern in SENSITIVE_PATTERNS.items():
-                if re.search(pattern, user_intent):
-                    block_request(flow, f"Regex Match in Query: {label}")
-                    return
-
-            # --- PHASE 2: LLM AGENT ---
-            decision = ask_local_agent(user_intent)
-            print(f"LLM Decision: {decision}")
-            if "BLOCK" in decision.upper():
-                block_request(flow, decision)
-                
-    except json.JSONDecodeError:
-        pass
-
+def make_mock_response(user_intent: str) -> dict:
+    """Returns a fake Copilot-style OpenAI chat completion response."""
+    return {
+        "id": "mock-chatcmpl-testmode",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": (
+                        f"[TEST MODE — not a real Copilot response]\n\n"
+                        f"Your request was ALLOWED by the proxy.\n"
+                        f"Intent received: {user_intent[:200]}"
+                    ),
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
 
 
 def block_request(flow, reason):
     print(f"🛡️ [BLOCKED] {reason}")
     flow.response = http.Response.make(
-        403, 
+        403,
         json.dumps({"error": "Policy Violation", "reason": reason}),
-        {"Content-Type": "application/json"}
+        {"Content-Type": "application/json"},
     )
+
+
+
+def request(flow: http.HTTPFlow) -> None:
+    relevant_paths = ["/chat/completions", "/completions", "/messages","responses"]
+    
+    print(f"\n{'='*50}")
+    print(f"URL: {flow.request.pretty_url}")
+    print(f"PATH: {flow.request.path}")
+    print(f"METHOD: {flow.request.method}")
+
+    is_ai_request = any(segment in flow.request.path for segment in relevant_paths)
+    print(f"IS AI REQUEST: {is_ai_request}")
+    
+    if not is_ai_request:
+        print("⏩ Skipping (not an AI path)")
+        return
+
+    try:
+        raw_text = flow.request.get_text()
+        data = json.loads(raw_text)
+        print(f"BODY KEYS: {list(data.keys())}")
+
+
+        user_intent = extract_meaningful_content(data)
+
+        print(f"USER INTENT: {str(user_intent)[:200] if user_intent else 'None ❌'}")
+        print(f"TEST_MODE: {TEST_MODE}")
+
+        if user_intent:
+            # Phase 1: Regex check
+            for label, pattern in SENSITIVE_PATTERNS.items():
+                if re.search(pattern, user_intent):
+                    block_request(flow, f"Regex Match in Query: {label}")
+                    return
+
+            # Phase 2: LLM agent check
+            decision = ask_local_agent(user_intent)
+            print(f"LLM Decision: {decision}")
+            if "BLOCK" in decision.upper():
+                block_request(flow, decision)
+                return
+
+            # Phase 3: ALLOW
+            if TEST_MODE:
+                print("✅ [TEST MODE] Returning mock response.")
+                mock = make_mock_response(user_intent)
+                flow.response = http.Response.make(
+                    200,
+                    json.dumps(mock),
+                    {"Content-Type": "application/json"},
+                )
+                # Setting flow.response stops mitmproxy from forwarding — no quota used
+
+    except json.JSONDecodeError:
+        pass

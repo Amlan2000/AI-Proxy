@@ -45,4 +45,5 @@ Intercepting requests
 
 4. You can also just run './launch-with-mitmproxy.sh code .' . This will open mitmproxy in another terminal
 
-5.
+5. Start the gatekeeper file using something like " python3 start_gatekeeper.py" in one terminal and 
+   Run local ollama in another terminal using 'ollama serve' 
