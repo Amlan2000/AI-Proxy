@@ -43,7 +43,7 @@ Intercepting requests
 }
 
 
-4. You can also just run './launch-with-mitmproxy.sh code .' . This will open mitmproxy in another terminal
+4. To just check if your requests are getting intercepted or not : You can just run './launch-with-mitmproxy.sh code .' . This will open mitmproxy in another terminal
 
-5. Start the gatekeeper file using something like " python3 start_gatekeeper.py" in one terminal and 
+5. To intercept your requests with your security layer: Start the gatekeeper file using something like " python3 start_gatekeeper.py" in one terminal and 
    Run local ollama in another terminal using 'ollama serve' 

@@ -11,6 +11,7 @@ SENSITIVE_PATTERNS = {
     "GitHub Token": r"ghp_[a-zA-Z0-9]{36}",
     "AWS Access Key": r"AKIA[0-9A-Z]{16}",
     "Generic Secret": r"(?i)(password|secret|passwd|db_password)\s*[:=]\s*['\"][^'\"]+['\"]"
+    # Can add more sensetive patterns here
 }
 
 os.environ["NO_PROXY"] = "127.0.0.1,localhost"
@@ -142,7 +143,7 @@ def request(flow: http.HTTPFlow) -> None:
     try:
         raw_text = flow.request.get_text()
         data = json.loads(raw_text)
-        print(f"BODY KEYS: {list(data.keys())}")
+        # print(f"BODY KEYS: {list(data.keys())}")
 
 
         user_intent = extract_meaningful_content(data)
